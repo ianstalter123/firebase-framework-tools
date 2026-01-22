@@ -1,12 +1,89 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+
+type Spot = { label: string; spotId: string };
 
 export default function Home() {
   const message = process.env["MESSAGE"] || "Hello!";
+
+  // San Clemente area spotIds (from Surfline URLs)
+  const spots: Spot[] = [
+    { label: "T-Street", spotId: "5842041f4e65fad6a7708830" },
+    { label: "San Clemente State Beach", spotId: "5842041f4e65fad6a77088cf" },
+    { label: "Lower Trestles", spotId: "5842041f4e65fad6a770888a" },
+    { label: "San Onofre State Beach", spotId: "584204204e65fad6a77099d4" },
+  ];
+
+  const [selectedSpotId, setSelectedSpotId] = useState(spots[0].spotId);
+  const selectedSpotLabel = useMemo(
+    () => spots.find((s) => s.spotId === selectedSpotId)?.label ?? "Selected spot",
+    [selectedSpotId]
+  );
+
   const [surfReport, setSurfReport] = useState("");
   const [status, setStatus] = useState("");
+  const [loadingForecast, setLoadingForecast] = useState(false);
+
+  const canSubmit = useMemo(() => surfReport.trim().length > 0, [surfReport]);
+
+  function formatSurflineDraft(json: any) {
+    // KBYG wave endpoint often returns:
+    // { data: { wave: [{ surf: { min, max, optimalScore? }, ... , timestamp }] }, associated: {...} }
+    const first = json?.data?.wave?.[0];
+    const min = first?.surf?.min;
+    const max = first?.surf?.max;
+
+    const range =
+      typeof min === "number" && typeof max === "number" ? `${min}-${max} ft` : "N/A";
+
+    const ts =
+      typeof first?.timestamp === "number"
+        ? new Date(first.timestamp * 1000).toLocaleString()
+        : "";
+
+    return [
+      `${selectedSpotLabel} (Surfline auto-draft)`,
+      "",
+      `Wave range (first interval): ${range}`,
+      ts ? `Timestamp: ${ts}` : "",
+      "",
+      "Admin notes:",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  async function fetchSurflineForecast() {
+    setStatus("");
+    setLoadingForecast(true);
+
+    try {
+      // Direct call to Surfline KBYG wave endpoint.
+      // If CORS blocks this in the browser, proxy it via a Next.js /api route.
+      const url = new URL("https://services.surfline.com/kbyg/spots/forecasts/wave");
+      url.searchParams.set("spotId", selectedSpotId);
+      url.searchParams.set("days", "1");
+      url.searchParams.set("intervalHours", "1");
+
+      const r = await fetch(url.toString(), { cache: "no-store" });
+      if (!r.ok) {
+        setStatus(`Surfline request failed: ${r.status} ${r.statusText}`);
+        return;
+      }
+
+      const json = await r.json();
+      const draft = formatSurflineDraft(json);
+
+      setSurfReport(draft);
+      setStatus("Forecast loaded into the textbox.");
+    } catch (e: any) {
+      setStatus(e?.message ?? "Error fetching Surfline forecast.");
+    } finally {
+      setLoadingForecast(false);
+    }
+  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -18,7 +95,11 @@ export default function Home() {
     }
 
     // Placeholder for now (replace with Firestore write later)
-    console.log("Submitted surf report:", surfReport);
+    console.log("Submitted surf report:", {
+      spotId: selectedSpotId,
+      spotName: selectedSpotLabel,
+      text: surfReport,
+    });
 
     setStatus("Submitted (console only).");
     setSurfReport("");
@@ -29,16 +110,16 @@ export default function Home() {
       <h1 className="heading">Next.js on Firebase App Hosting!!!</h1>
       <p>{message}</p>
 
-      {/* Simple input box (MVP) */}
+      {/* Admin / forecast-assisted input */}
       <section style={{ marginTop: 24 }}>
         <h2 style={{ fontSize: 18, marginBottom: 8 }}>Admin: Add Surf Report</h2>
 
-        <form onSubmit={handleSubmit} style={{ display: "grid", gap: 10 }}>
-          <input
-            type="text"
-            value={surfReport}
-            onChange={(e) => setSurfReport(e.target.value)}
-            placeholder="Type surf report here…"
+        <div style={{ display: "grid", gap: 10, marginBottom: 12 }}>
+          <label style={{ fontSize: 14, opacity: 0.9 }}>San Clemente spot</label>
+
+          <select
+            value={selectedSpotId}
+            onChange={(e) => setSelectedSpotId(e.target.value)}
             style={{
               width: "100%",
               padding: "12px 14px",
@@ -48,19 +129,64 @@ export default function Home() {
               color: "inherit",
               outline: "none",
             }}
-          />
+          >
+            {spots.map((s) => (
+              <option key={s.spotId} value={s.spotId}>
+                {s.label}
+              </option>
+            ))}
+          </select>
 
           <button
-            type="submit"
-            disabled={!surfReport.trim()}
+            type="button"
+            onClick={fetchSurflineForecast}
+            disabled={loadingForecast}
             style={{
               padding: "12px 14px",
               borderRadius: 10,
               border: "1px solid rgba(255,255,255,0.2)",
-              background: surfReport.trim()
+              background: loadingForecast
+                ? "rgba(255,255,255,0.06)"
+                : "rgba(255,255,255,0.12)",
+              cursor: loadingForecast ? "not-allowed" : "pointer",
+              color: "inherit",
+              fontWeight: 600,
+            }}
+          >
+            {loadingForecast ? "Fetching…" : "Fetch from Surfline"}
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} style={{ display: "grid", gap: 10 }}>
+          <textarea
+            value={surfReport}
+            onChange={(e) => setSurfReport(e.target.value)}
+            placeholder="Write the surf report here… (or fetch from Surfline)"
+            rows={9}
+            style={{
+              width: "100%",
+              padding: "12px 14px",
+              borderRadius: 10,
+              border: "1px solid rgba(255,255,255,0.2)",
+              background: "rgba(0,0,0,0.2)",
+              color: "inherit",
+              outline: "none",
+              resize: "vertical",
+              fontFamily: "inherit",
+            }}
+          />
+
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            style={{
+              padding: "12px 14px",
+              borderRadius: 10,
+              border: "1px solid rgba(255,255,255,0.2)",
+              background: canSubmit
                 ? "rgba(255,255,255,0.12)"
                 : "rgba(255,255,255,0.06)",
-              cursor: surfReport.trim() ? "pointer" : "not-allowed",
+              cursor: canSubmit ? "pointer" : "not-allowed",
               color: "inherit",
               fontWeight: 600,
             }}
@@ -69,11 +195,7 @@ export default function Home() {
           </button>
         </form>
 
-        <p style={{ marginTop: 10, opacity: 0.85 }}>
-          Preview: <span style={{ fontStyle: "italic" }}>{surfReport || "…"}</span>
-        </p>
-
-        {status ? <p style={{ marginTop: 8, opacity: 0.9 }}>{status}</p> : null}
+        {status ? <p style={{ marginTop: 10, opacity: 0.9 }}>{status}</p> : null}
       </section>
 
       <section className="features">
