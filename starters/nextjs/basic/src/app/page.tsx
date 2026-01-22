@@ -55,35 +55,34 @@ export default function Home() {
       .join("\n");
   }
 
-  async function fetchSurflineForecast() {
+    async function fetchSurflineForecast() {
     setStatus("");
     setLoadingForecast(true);
 
     try {
-      // Direct call to Surfline KBYG wave endpoint.
-      // If CORS blocks this in the browser, proxy it via a Next.js /api route.
-      const url = new URL("https://services.surfline.com/kbyg/spots/forecasts/wave");
+      const url = new URL("/api/surfline/wave", window.location.origin);
       url.searchParams.set("spotId", selectedSpotId);
       url.searchParams.set("days", "1");
       url.searchParams.set("intervalHours", "1");
 
       const r = await fetch(url.toString(), { cache: "no-store" });
-      if (!r.ok) {
-        setStatus(`Surfline request failed: ${r.status} ${r.statusText}`);
+      const j = await r.json();
+
+      if (!r.ok || !j?.ok) {
+        setStatus(j?.error ?? `Request failed: ${r.status} ${r.statusText}`);
         return;
       }
 
-      const json = await r.json();
-      const draft = formatSurflineDraft(json);
-
+      const draft = formatSurflineDraft(j.data);
       setSurfReport(draft);
       setStatus("Forecast loaded into the textbox.");
     } catch (e: any) {
-      setStatus(e?.message ?? "Error fetching Surfline forecast.");
+      setStatus(e?.message ?? "Error fetching forecast.");
     } finally {
       setLoadingForecast(false);
     }
   }
+
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
